@@ -44,6 +44,24 @@
     </div>
 
     <div class="card">
+      <h2>导出与打印</h2>
+      <div class="flex" style="flex-wrap:wrap">
+        <div style="min-width:120px"><label>纸张大小</label>
+          <select id="ex-paper"><option>A4</option><option>A3</option><option>Letter</option></select></div>
+        <div style="min-width:100px"><label>方向</label>
+          <select id="ex-orient"><option value="landscape">横向</option><option value="portrait">纵向</option></select></div>
+        <div style="min-width:170px"><label>版面</label>
+          <select id="ex-fit"><option value="pages">自动分页（保持比例）</option><option value="scale">缩放适应一页</option></select></div>
+        <div style="align-self:flex-end" class="btn-row">
+          <button class="btn primary" onclick="exportPrint()">打印 / 存为 PDF</button>
+          <button class="btn" onclick="exportPNG()">导出 PNG</button>
+          <button class="btn" onclick="exportSVG()">导出 SVG</button>
+        </div>
+      </div>
+      <div class="small muted mt">导出内容与当前屏幕一致：当前方案、当前视图（按资源 / 按任务），含标题、图例、时间轴与每个任务的起止时间标注；分页时每页均重复标题、图例与时间轴。</div>
+    </div>
+
+    <div class="card">
       <h2>任务安排</h2>
       <table><thead><tr><th>任务</th><th class="num">开始</th><th class="num">结束</th><th class="num">工期</th><th>资源</th></tr></thead>
         <tbody id="assignment-rows"></tbody></table>
@@ -52,6 +70,7 @@
 </div>
 <script src="js/common.js"></script>
 <script src="js/gantt.js"></script>
+<script src="js/gantt_export.js"></script>
 <script>
 let problem = null;
 let solution = null;
@@ -98,8 +117,8 @@ function render() {
     problem, assignments: solution.assignments, mode,
     title: `排程 — ${SOLVER_LABELS[solution.solver] || solution.solver}`,
   });
-  document.getElementById('legend').innerHTML = problem.resources.map((r, i) =>
-    `<span><span class="swatch" style="background:${PALETTE[i % PALETTE.length]}"></span>${escapeHtml(r.id)}</span>`).join('');
+  document.getElementById('legend').innerHTML = problem.tasks.map(t =>
+    `<span><span class="swatch" style="background:${colorFor(t.id)}"></span>${escapeHtml(t.id)} · ${escapeHtml(t.name)}</span>`).join('');
   document.getElementById('assignment-rows').innerHTML = solution.assignments.map(a => `
     <tr><td class="mono">${escapeHtml(a.task)}</td>
       <td class="num">${a.start}</td><td class="num">${a.end}</td>
@@ -113,6 +132,48 @@ async function quickSolve() {
   });
   toast(`已用 ${SOLVER_LABELS[quickSel.value]} 求解：目标值 ${fmt(sol.objective_value)}`);
   await loadSolutions(sol.id);
+}
+
+/* ---- export ------------------------------------------------------------
+   State is read at click time from the same objects the on-screen chart was
+   rendered from, so the export always matches the screen. */
+function exportState() {
+  const mode = document.getElementById('mode').value;
+  return {
+    title: document.getElementById('chart-title').textContent,
+    meta: document.getElementById('sol-meta').textContent,
+    legend: problem.tasks.map(t => ({ color: colorFor(t.id), label: `${t.id} · ${t.name}` })),
+    source: renderExportChart(problem, solution.assignments, mode, null),
+  };
+}
+
+function exportFileName(ext) {
+  const mode = document.getElementById('mode').value;
+  return `gantt-${problem.id}-${solution.id}-${mode}.${ext}`;
+}
+
+function exportSVG() {
+  if (!solution) return toast('请先选择求解方案', 'error');
+  downloadSVG(buildStandaloneSVG(exportState()), exportFileName('svg'));
+  toast('已导出 SVG');
+}
+
+function exportPNG() {
+  if (!solution) return toast('请先选择求解方案', 'error');
+  downloadPNG(buildStandaloneSVG(exportState()), exportFileName('png'))
+    .then(() => toast('已导出 PNG'))
+    .catch(e => toast(e.message, 'error'));
+}
+
+function exportPrint() {
+  if (!solution) return toast('请先选择求解方案', 'error');
+  const n = printGantt({
+    ...exportState(),
+    paper: document.getElementById('ex-paper').value,
+    orientation: document.getElementById('ex-orient').value,
+    fit: document.getElementById('ex-fit').value,
+  });
+  toast(n > 1 ? `已按纸张分页为 ${n} 页，正在打开打印…` : '正在打开打印…');
 }
 
 document.getElementById('solution-picker').addEventListener('change', e => showSolution(e.target.value));

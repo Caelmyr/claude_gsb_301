@@ -42,6 +42,34 @@
     </div>
 
     <div class="card">
+      <h2>并排甘特图对比</h2>
+      <div class="flex" style="flex-wrap:wrap">
+        <div style="min-width:220px"><label>方案 A</label><select id="cmp-a"></select></div>
+        <div style="min-width:220px"><label>方案 B</label><select id="cmp-b"></select></div>
+        <div style="min-width:130px"><label>视图</label>
+          <select id="cmp-mode"><option value="resource">按资源</option><option value="task">按任务</option></select></div>
+        <div style="align-self:flex-end">
+          <button class="btn primary" onclick="renderCompareGantt()">并排显示</button></div>
+      </div>
+      <div class="gantt-compare mt" id="cmp-charts"><div class="empty">选择两个方案后点击「并排显示」。</div></div>
+      <div class="legend" id="cmp-legend"></div>
+      <div class="flex" style="flex-wrap:wrap">
+        <div style="min-width:120px"><label>纸张大小</label>
+          <select id="cmp-paper"><option>A4</option><option>A3</option><option>Letter</option></select></div>
+        <div style="min-width:100px"><label>方向</label>
+          <select id="cmp-orient"><option value="landscape">横向</option><option value="portrait">纵向</option></select></div>
+        <div style="min-width:170px"><label>版面</label>
+          <select id="cmp-fit"><option value="pages">自动分页（保持比例）</option><option value="scale">缩放适应一页</option></select></div>
+        <div style="align-self:flex-end" class="btn-row">
+          <button class="btn" onclick="cmpPrint()">打印 / 存为 PDF</button>
+          <button class="btn" onclick="cmpPNG()">导出 PNG</button>
+          <button class="btn" onclick="cmpSVG()">导出 SVG</button>
+        </div>
+      </div>
+      <div class="small muted mt">导出内容即当前并排显示的两个方案与视图，含标题、图例、时间轴与每个任务的起止时间标注。</div>
+    </div>
+
+    <div class="card">
       <h2>全部方案一览</h2>
       <table><thead><tr><th>ID</th><th>求解器</th><th class="num">目标值</th><th class="num">完工时间</th><th>创建时间</th></tr></thead>
         <tbody id="all-rows"></tbody></table>
@@ -50,9 +78,12 @@
 </div>
 <script src="js/common.js"></script>
 <script src="js/charts.js"></script>
+<script src="js/gantt.js"></script>
+<script src="js/gantt_export.js"></script>
 <script>
 let problem = null;
 let solutions = [];
+let cmpSolA = null, cmpSolB = null, cmpMode = 'resource';
 
 initSidebar('compare.html');
 
@@ -64,6 +95,16 @@ async function load() {
   solutions = r.solutions;
   renderChecks();
   renderAll();
+  renderCmpSelects();
+}
+
+function renderCmpSelects() {
+  const opts = solutions.map(s =>
+    `<option value="${s.id}">${escapeHtml(solverLabel(s.solver))} · 目标 ${fmt(s.objective_value)} · ${escapeHtml(s.created_at)}</option>`).join('')
+    || '<option value="">— 暂无求解结果 —</option>';
+  document.getElementById('cmp-a').innerHTML = opts;
+  document.getElementById('cmp-b').innerHTML = opts;
+  if (solutions.length > 1) document.getElementById('cmp-b').value = solutions[1].id;
 }
 
 function renderChecks() {
@@ -116,6 +157,72 @@ function renderAll() {
       <td class="num">${fmt(s.objective_value)}</td><td class="num">${fmt(s.makespan)}</td>
       <td class="small muted">${escapeHtml(s.created_at)}</td></tr>`).join('')
     || '<tr><td colspan="5" class="empty">暂无求解结果。</td></tr>';
+}
+
+/* ---- side-by-side gantt + export ----------------------------------------
+   The two solutions shown on screen are kept in cmpSolA / cmpSolB; export
+   re-renders from exactly those objects, so the file matches the screen. */
+async function renderCompareGantt() {
+  const aId = document.getElementById('cmp-a').value;
+  const bId = document.getElementById('cmp-b').value;
+  if (!aId || !bId) return toast('请选择要对比的两个方案', 'error');
+  [cmpSolA, cmpSolB] = await Promise.all([
+    api(`/problems/${problem.id}/solutions/${aId}`),
+    api(`/problems/${problem.id}/solutions/${bId}`),
+  ]);
+  cmpMode = document.getElementById('cmp-mode').value;
+  const host = document.getElementById('cmp-charts');
+  host.innerHTML = '';
+  for (const [tag, sol] of [['A', cmpSolA], ['B', cmpSolB]]) {
+    const div = document.createElement('div');
+    div.className = 'gantt-wrap';
+    host.appendChild(div);
+    renderGantt(div, {
+      problem, assignments: sol.assignments, mode: cmpMode,
+      title: `方案 ${tag} — ${solverLabel(sol.solver)} · 目标 ${fmt(sol.objective_value)}`,
+    });
+  }
+  document.getElementById('cmp-legend').innerHTML = problem.tasks.map(t =>
+    `<span><span class="swatch" style="background:${colorFor(t.id)}"></span>${escapeHtml(t.id)} · ${escapeHtml(t.name)}</span>`).join('');
+}
+
+function cmpState() {
+  if (!cmpSolA || !cmpSolB) { toast('请先点击「并排显示」', 'error'); return null; }
+  const chart = (sol, tag) => renderExportChart(problem, sol.assignments, cmpMode,
+    `方案 ${tag} — ${solverLabel(sol.solver)} · 目标 ${fmt(sol.objective_value)}`);
+  return {
+    title: `方案对比 — A: ${solverLabel(cmpSolA.solver)} vs B: ${solverLabel(cmpSolB.solver)}（${cmpMode === 'task' ? '按任务' : '按资源'}）`,
+    meta: `A 目标 ${fmt(cmpSolA.objective_value)} · 完工 ${fmt(cmpSolA.makespan)} ｜ B 目标 ${fmt(cmpSolB.objective_value)} · 完工 ${fmt(cmpSolB.makespan)}`,
+    legend: problem.tasks.map(t => ({ color: colorFor(t.id), label: `${t.id} · ${t.name}` })),
+    source: composeSideBySide([chart(cmpSolA, 'A'), chart(cmpSolB, 'B')]),
+  };
+}
+
+function cmpSVG() {
+  const st = cmpState();
+  if (!st) return;
+  downloadSVG(buildStandaloneSVG(st), `gantt-compare-${problem.id}.svg`);
+  toast('已导出 SVG');
+}
+
+function cmpPNG() {
+  const st = cmpState();
+  if (!st) return;
+  downloadPNG(buildStandaloneSVG(st), `gantt-compare-${problem.id}.png`)
+    .then(() => toast('已导出 PNG'))
+    .catch(e => toast(e.message, 'error'));
+}
+
+function cmpPrint() {
+  const st = cmpState();
+  if (!st) return;
+  const n = printGantt({
+    ...st,
+    paper: document.getElementById('cmp-paper').value,
+    orientation: document.getElementById('cmp-orient').value,
+    fit: document.getElementById('cmp-fit').value,
+  });
+  toast(n > 1 ? `已按纸张分页为 ${n} 页，正在打开打印…` : '正在打开打印…');
 }
 
 load().catch(e => toast(e.message, 'error'));

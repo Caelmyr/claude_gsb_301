@@ -4,8 +4,11 @@
      problem: {resources, tasks, horizon, time_unit},
      assignments: [{task, start, end, resources}],
      mode: 'task' | 'resource',
-     title
+     title,
+     annotate   // also draw start/end time labels beside every bar (used for export)
    })
+
+   Returns the generated <svg> element.
 */
 
 const GANTT_ROW_H = 34;
@@ -15,7 +18,7 @@ const GANTT_TOP = 30;
 const GANTT_PX_PER_UNIT = 24;
 
 function renderGantt(container, opts) {
-  const { problem, assignments, mode = 'resource', title } = opts;
+  const { problem, assignments, mode = 'resource', title, annotate = false } = opts;
   const horizon = problem.horizon || 0;
   const px = GANTT_PX_PER_UNIT;
   const tasks = Object.fromEntries(problem.tasks.map(t => [t.id, t]));
@@ -105,6 +108,13 @@ function renderGantt(container, opts) {
         const label = add('text', { x: x + 6, y: y + GANTT_ROW_H / 2 + 4, 'font-size': 11, fill: '#fff', 'font-weight': 600 });
         label.textContent = a.task;
       }
+      if (annotate) {
+        const ty = y + GANTT_ROW_H / 2 + 3;
+        const sLbl = add('text', { x: x - 4, y: ty, 'font-size': 9, fill: '#6b7280', 'text-anchor': 'end' });
+        sLbl.textContent = a.start;
+        const eLbl = add('text', { x: x + w + 4, y: ty, 'font-size': 9, fill: '#6b7280', 'text-anchor': 'start' });
+        eLbl.textContent = a.end;
+      }
       // interactions
       const show = (ev) => {
         tip.innerHTML = `<b>${escapeHtml(a.task)}</b> · ${escapeHtml(tasks[a.task]?.name || '')}<br>` +
@@ -128,4 +138,5 @@ function renderGantt(container, opts) {
     const mkLbl = add('text', { x, y: GANTT_TOP - 12, 'font-size': 11, fill: '#dc2626', 'font-weight': 700, 'text-anchor': 'middle' });
     mkLbl.textContent = '完工时间 ' + mk;
   }
+  return svg;
 }
