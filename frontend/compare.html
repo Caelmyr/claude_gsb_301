@@ -41,6 +41,44 @@
       </tr></thead><tbody id="rows"></tbody></table>
     </div>
 
+    <div class="card" id="gantt-card" style="display:none">
+      <div class="flex">
+        <h2 style="margin:0">方案甘特图对比</h2>
+        <div class="spacer"></div>
+        <label style="margin:0 6px 0 0">视图</label>
+        <select id="gantt-mode" style="width:auto">
+          <option value="resource">按资源</option><option value="task">按任务</option>
+        </select>
+      </div>
+      <div id="compare-gantts"></div>
+      <div class="flex" style="flex-wrap:wrap;margin-top:14px">
+        <div style="min-width:110px"><label>纸张</label>
+          <select id="ex-paper">
+            <option value="a4">A4</option><option value="a3">A3</option>
+            <option value="a5">A5</option><option value="letter">Letter</option>
+          </select></div>
+        <div style="min-width:110px"><label>方向</label>
+          <select id="ex-orient">
+            <option value="landscape">横向</option><option value="portrait">纵向</option>
+          </select></div>
+        <div style="min-width:170px"><label>大图处理</label>
+          <select id="ex-fit">
+            <option value="paginate">分页（保持比例）</option>
+            <option value="scale">缩放至一页</option>
+          </select></div>
+        <div style="align-self:flex-end">
+          <label style="font-weight:400;color:var(--ink)">
+            <input type="checkbox" id="ex-annotate" checked style="width:auto;margin-right:5px">标注任务起止时间</label></div>
+        <div class="spacer"></div>
+        <div style="align-self:flex-end" class="btn-row">
+          <button class="btn primary" onclick="compareExport('pdf')">导出 PDF</button>
+          <button class="btn" onclick="compareExport('png')">导出 PNG</button>
+          <button class="btn" onclick="compareExport('svg')">导出 SVG</button>
+        </div>
+      </div>
+      <div class="export-note">导出内容以当前屏幕显示为准（当前对比的方案集合与视图），每个方案一节、按屏幕顺序排页。</div>
+    </div>
+
     <div class="card">
       <h2>全部方案一览</h2>
       <table><thead><tr><th>ID</th><th>求解器</th><th class="num">目标值</th><th class="num">完工时间</th><th>创建时间</th></tr></thead>
@@ -50,9 +88,12 @@
 </div>
 <script src="js/common.js"></script>
 <script src="js/charts.js"></script>
+<script src="js/gantt.js"></script>
+<script src="js/gantt-export.js"></script>
 <script>
 let problem = null;
 let solutions = [];
+let compared = [];   // solutions currently shown in the comparison (in display order)
 
 initSidebar('compare.html');
 
@@ -89,6 +130,7 @@ async function compare() {
   const { solutions: rows } = await api(`/problems/${problem.id}/compare`, {
     method: 'POST', body: JSON.stringify({ solution_ids: ids }),
   });
+  compared = rows;
   document.getElementById('result-card').style.display = 'block';
   barChart(document.getElementById('bar-chart'), {
     labels: rows.map(s => solverLabel(s.solver) + (s.is_best ? ' ★' : '')),
@@ -108,7 +150,66 @@ async function compare() {
       <td class="num">${fmt(s.lower_bound)}</td>
       <td><a href="gantt.html?id=${encodeURIComponent(problem.id)}&solution=${encodeURIComponent(s.id)}">甘特图</a></td>
     </tr>`).join('');
+  renderCompareGantts();
 }
+
+/* Side-by-side gantts for the compared solutions, rendered from the same
+   response rows as the table above — so the charts can never disagree with
+   the numbers, and the export below uses the same in-memory objects. */
+function renderCompareGantts() {
+  const card = document.getElementById('gantt-card');
+  if (!compared.length) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  const mode = document.getElementById('gantt-mode').value;
+  const host = document.getElementById('compare-gantts');
+  host.innerHTML = '';
+  compared.forEach(s => {
+    const sec = h('div', { class: 'compare-gantt-section' });
+    sec.appendChild(h('h3', {},
+      `${solverLabel(s.solver)} — 目标 ${fmt(s.objective_value)} · 完工 ${fmt(s.makespan)} · ${statusLabel(s.status)}`));
+    const g = h('div', {});
+    sec.appendChild(g);
+    const leg = h('div', { class: 'legend' });
+    leg.innerHTML = ganttLegendItems(problem, s.assignments)
+      .map(it => `<span><span class="swatch" style="background:${it.color}"></span>${escapeHtml(it.label)}</span>`).join('');
+    sec.appendChild(leg);
+    host.appendChild(sec);
+    renderGantt(g, {
+      problem, assignments: s.assignments, mode,
+      title: `排程 — ${solverLabel(s.solver)}`,
+    });
+  });
+}
+
+/* Export exactly the solutions and view mode currently on screen. */
+async function compareExport(format) {
+  if (!problem || !compared.length) return toast('请先执行对比', 'error');
+  const mode = document.getElementById('gantt-mode').value;
+  const modeLabel = mode === 'task' ? '按任务' : '按资源';
+  const spec = {
+    problem,
+    name: `${problem.name || problem.id}-方案对比`,
+    sections: compared.map(s => ({
+      title: `甘特图 — ${solverLabel(s.solver)}（${modeLabel}）`,
+      meta: `目标 ${fmt(s.objective_value)} · 完工时间 ${fmt(s.makespan)} · ` +
+        `${statusLabel(s.status)} · 方案 ${s.id}`,
+      assignments: s.assignments,
+      mode,
+    })),
+    paper: document.getElementById('ex-paper').value,
+    orientation: document.getElementById('ex-orient').value,
+    fit: document.getElementById('ex-fit').value,
+    annotate: document.getElementById('ex-annotate').checked,
+  };
+  try {
+    const n = await exportGanttPages(spec, format);
+    toast(`已导出 ${n} 页（${format.toUpperCase()}）`);
+  } catch (e) {
+    toast('导出失败：' + e.message, 'error');
+  }
+}
+
+document.getElementById('gantt-mode').addEventListener('change', renderCompareGantts);
 
 function renderAll() {
   document.getElementById('all-rows').innerHTML = solutions.map(s => `

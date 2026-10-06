@@ -44,6 +44,36 @@
     </div>
 
     <div class="card">
+      <h2>导出与打印</h2>
+      <div class="flex" style="flex-wrap:wrap">
+        <div style="min-width:110px"><label>纸张</label>
+          <select id="ex-paper">
+            <option value="a4">A4</option><option value="a3">A3</option>
+            <option value="a5">A5</option><option value="letter">Letter</option>
+          </select></div>
+        <div style="min-width:110px"><label>方向</label>
+          <select id="ex-orient">
+            <option value="landscape">横向</option><option value="portrait">纵向</option>
+          </select></div>
+        <div style="min-width:170px"><label>大图处理</label>
+          <select id="ex-fit">
+            <option value="paginate">分页（保持比例）</option>
+            <option value="scale">缩放至一页</option>
+          </select></div>
+        <div style="align-self:flex-end">
+          <label style="font-weight:400;color:var(--ink)">
+            <input type="checkbox" id="ex-annotate" checked style="width:auto;margin-right:5px">标注任务起止时间</label></div>
+        <div class="spacer"></div>
+        <div style="align-self:flex-end" class="btn-row">
+          <button class="btn primary" onclick="doExport('pdf')">导出 PDF</button>
+          <button class="btn" onclick="doExport('png')">导出 PNG</button>
+          <button class="btn" onclick="doExport('svg')">导出 SVG</button>
+        </div>
+      </div>
+      <div class="export-note">导出内容以当前屏幕显示为准（当前方案 + 当前视图），含标题、图例、时间轴与任务时间标注；分页时每页都带图例和时间轴，跨页任务条以 ◀ ▶ 标记衔接。</div>
+    </div>
+
+    <div class="card">
       <h2>任务安排</h2>
       <table><thead><tr><th>任务</th><th class="num">开始</th><th class="num">结束</th><th class="num">工期</th><th>资源</th></tr></thead>
         <tbody id="assignment-rows"></tbody></table>
@@ -52,6 +82,7 @@
 </div>
 <script src="js/common.js"></script>
 <script src="js/gantt.js"></script>
+<script src="js/gantt-export.js"></script>
 <script>
 let problem = null;
 let solution = null;
@@ -98,8 +129,9 @@ function render() {
     problem, assignments: solution.assignments, mode,
     title: `排程 — ${SOLVER_LABELS[solution.solver] || solution.solver}`,
   });
-  document.getElementById('legend').innerHTML = problem.resources.map((r, i) =>
-    `<span><span class="swatch" style="background:${PALETTE[i % PALETTE.length]}"></span>${escapeHtml(r.id)}</span>`).join('');
+  // Legend matches the bars: bars are coloured by task id (colorFor).
+  document.getElementById('legend').innerHTML = ganttLegendItems(problem, solution.assignments)
+    .map(it => `<span><span class="swatch" style="background:${it.color}"></span>${escapeHtml(it.label)}</span>`).join('');
   document.getElementById('assignment-rows').innerHTML = solution.assignments.map(a => `
     <tr><td class="mono">${escapeHtml(a.task)}</td>
       <td class="num">${a.start}</td><td class="num">${a.end}</td>
@@ -113,6 +145,34 @@ async function quickSolve() {
   });
   toast(`已用 ${SOLVER_LABELS[quickSel.value]} 求解：目标值 ${fmt(sol.objective_value)}`);
   await loadSolutions(sol.id);
+}
+
+/* Export exactly what is on screen right now: the currently displayed
+   solution object and the current view mode — no re-fetch, no stale data. */
+async function doExport(format) {
+  if (!problem || !solution) return toast('请先选择并显示一个求解方案', 'error');
+  const mode = document.getElementById('mode').value;
+  const spec = {
+    problem,
+    name: `${problem.name || problem.id}-甘特图-${SOLVER_LABELS[solution.solver] || solution.solver}`,
+    sections: [{
+      title: document.getElementById('chart-title').textContent,
+      meta: `目标 ${fmt(solution.objective_value)} · 完工时间 ${fmt(solution.makespan)} · ` +
+        `${statusLabel(solution.status)} · 方案 ${solution.id}`,
+      assignments: solution.assignments,
+      mode,
+    }],
+    paper: document.getElementById('ex-paper').value,
+    orientation: document.getElementById('ex-orient').value,
+    fit: document.getElementById('ex-fit').value,
+    annotate: document.getElementById('ex-annotate').checked,
+  };
+  try {
+    const n = await exportGanttPages(spec, format);
+    toast(`已导出 ${n} 页（${format.toUpperCase()}）`);
+  } catch (e) {
+    toast('导出失败：' + e.message, 'error');
+  }
 }
 
 document.getElementById('solution-picker').addEventListener('change', e => showSolution(e.target.value));
